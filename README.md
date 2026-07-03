@@ -20,12 +20,28 @@ opaque strings; all payment semantics live in clients and verifiers.
 
 | Paper object | Code |
 |---|---|
-| Payment `p = (S, k, P, v, m, σ_S)` (Def. 1), conflict relation (Def. 2) | `turnstile/payment.py` |
+| Payment `p = (S, k, P, v, m, σ_S)` (Def. 1), conflict relation (Def. 2), hash locks (§10(1)) | `turnstile/payment.py` |
 | Pod view `D = (T, r_perf)`, traces, β-padded medians, settlement predicate (Def. 3 / Alg. 2), detectors (Thm. 3), certificates `SC_p = (C_p, C_pp)` | `turnstile/view.py` |
 | Stateless replica: votes, per-replica sequence numbers, heartbeats, Byzantine equivocation mode (Alg. 1 write path) | `turnstile/replica.py` |
-| Streaming client: write, poll `Settled(p, D)` | `turnstile/client.py` |
+| Streaming client: write, reveal preimages, poll `Settled(p, D)` | `turnstile/client.py` |
+| x402 facilitator mapping (§7): `/verify`, `/settle`, demo 402 seller | `turnstile/facilitator.py` |
 | Exhaustive model checker at `(n, β, γ) = (6, 1, 0)` (§9(4), Remark 1) | `turnstile/checker.py` |
 | Benchmark harness (Table 1 + fault/equivocation injections) | `bench.py` |
+
+**Conditional payments (§10(1)).** A payment may carry a hash lock `y`; it
+settles only once a preimage `x` with `H(x) = y` is itself written to pod
+and past-perfect. Two counterparties atomically exchange payments (PvP) by
+conditioning both legs on the same `y` — either both settlement predicates
+become satisfiable when `x` appears, or neither ever does. The settlement
+certificate then also carries `x` and the preimage's confirmation votes, so
+third parties re-verify the lock offline.
+
+**x402 mapping (§7).** `turnstile/facilitator.py` realizes the standard
+flow: `402` + quote (quote hash = `m`) → agent signs `p` → facilitator
+writes to all replicas → verify = Alg. 2 → settle: serve the resource and
+embed `H(C_p)` in `X-PAYMENT-RESPONSE`. The pod settlement certificate is
+the payment-proof object x402/AP2 leave abstract; a conflicting spend of
+the same `(S, k)` is answered with `409` and the two-signature proof.
 
 ## Quickstart
 
@@ -95,11 +111,11 @@ replica. A settled payment carries the portable settlement certificate
 ## Scope
 
 This is the protocol-overhead prototype of §9: it establishes the floor above
-`2δ` on loopback, deliberately separated from network physics. The deployment
-surface of §6–7 (USDC/CCTP funding, hourly netted checkpoints, the on-chain
-challenge predicate, the x402 facilitator mapping, ML-DSA-44 lanes) is
-specified in the paper and not implemented here. Not financial or legal
-advice.
+`2δ` on loopback, deliberately separated from network physics. Of the
+deployment surface of §6–7, the x402 facilitator mapping and conditional
+payments are implemented here; USDC/CCTP funding, hourly netted checkpoints,
+the on-chain challenge predicate, and ML-DSA-44 lanes are specified in the
+paper and not implemented. Not financial or legal advice.
 
 ## License
 

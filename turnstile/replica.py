@@ -18,7 +18,7 @@ import time
 
 from nacl.signing import SigningKey
 
-from .payment import Payment
+from .payment import Payment, preimage_tx_id
 from .view import HEARTBEAT, Vote, vote_payload
 
 
@@ -86,6 +86,16 @@ class Replica:
                 vote = self._vote(p.tx_id)
                 self.seen[p.tx_id] = vote
             self._broadcast({"t": "v", "vote": vote.to_dict(), "pay": p.to_dict()})
+        elif kind == "reveal":
+            # A hash-lock preimage is an ordinary opaque write (Sec. 10(1)).
+            x = msg["x"]
+            tx_id = preimage_tx_id(x)
+            if tx_id in self.seen:
+                vote = self.seen[tx_id]
+            else:
+                vote = self._vote(tx_id)
+                self.seen[tx_id] = vote
+            self._broadcast({"t": "v", "vote": vote.to_dict(), "pre": x})
         elif kind == "equivocate" and self.byzantine:
             # Re-sign a fresh (ts, sn) for a seen transaction: the fault
             # the detector of Thm. 3(b) must catch.

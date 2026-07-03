@@ -47,7 +47,7 @@ class Client:
                     continue
                 vote = Vote.from_dict(msg["vote"])
                 pay = Payment.from_dict(msg["pay"]) if "pay" in msg else None
-                self.view.add_vote(vote, pay)
+                self.view.add_vote(vote, pay, msg.get("pre"))
         except (ConnectionError, json.JSONDecodeError, asyncio.CancelledError):
             pass
 
@@ -57,6 +57,12 @@ class Client:
         data = (json.dumps({"t": "write", "pay": p.to_dict()}) + "\n").encode()
         conns = self._conns if to is None else [self._conns[i] for i in to]
         for _, writer in conns:
+            writer.write(data)
+
+    async def reveal(self, x_hex: str) -> None:
+        """Write a hash-lock preimage to all replicas (Sec. 10(1))."""
+        data = (json.dumps({"t": "reveal", "x": x_hex}) + "\n").encode()
+        for _, writer in self._conns:
             writer.write(data)
 
     async def request_equivocation(self, replica_idx: int, tx_id: str) -> None:

@@ -23,7 +23,7 @@ from typing import Optional
 from nacl.exceptions import BadSignatureError
 from nacl.signing import VerifyKey
 
-from .payment import Payment, conflicting
+from .payment import Payment, conflicting, hash_lock, preimage_tx_id
 
 NEG_INF = float("-inf")
 POS_INF = float("inf")
@@ -112,6 +112,8 @@ class PodView:
         self.mrt_vote: dict[str, Vote] = {}          # replica -> vote carrying mrt
         self.slots: dict[tuple, set] = {}            # (S, k) -> {tx_id}
 
+        self.preimages: dict[str, str] = {}          # y -> revealed preimage x
+
         self.sender_proofs: list[tuple[Payment, Payment]] = []
         self.replica_proofs: list[tuple[Vote, Vote]] = []
         self._replica_seq: dict[tuple, Vote] = {}    # (replica, sn) -> vote
@@ -137,7 +139,13 @@ class PodView:
                 self.sender_proofs.append((other, p))
         slot.add(p.tx_id)
 
-    def add_vote(self, vote: Vote, payment: Optional[Payment] = None) -> None:
+    def add_preimage(self, x_hex: str) -> None:
+        """Record a revealed hash-lock preimage (its votes accrue to the
+        preimage transaction like any other write)."""
+        self.preimages.setdefault(hash_lock(x_hex), x_hex)
+
+    def add_vote(self, vote: Vote, payment: Optional[Payment] = None,
+                 preimage: Optional[str] = None) -> None:
         """Ingest one replica vote (payment vote or heartbeat). Verifies the
         signature, runs the replica-equivocation detector (Thm. 3b via pod's
         per-replica sequence numbers), advances most-recent timestamps
@@ -162,10 +170,10 @@ class PodView:
         if vote.tx_id == HEARTBEAT:
             return
 
-        if payment is not None:
-            add = payment.tx_id == vote.tx_id
-            if add:
-                self.add_payment(payment)
+        if payment is not None and payment.tx_id == vote.tx_id:
+            self.add_payment(payment)
+        if preimage is not None and preimage_tx_id(preimage) == vote.tx_id:
+            self.add_preimage(preimage)
 
         per_tx = self.votes.setdefault(vote.tx_id, {})
         prior_tx = per_tx.get(vote.rp)
@@ -237,6 +245,8 @@ class PodView:
         rp = self.rperf()
         if (trace.rconf >= rp) if strict else (trace.rconf > rp):
             return SettleStatus.PENDING, None                 # Def. 3(ii)
+        if p.y and not self._lock_open(p.y, rp, strict):
+            return SettleStatus.PENDING, None                 # Sec. 10(1) conjunct
         if self.balance(p.S, p.k) < p.v + self.fee:
             return SettleStatus.INSOLVENT, None               # Def. 3(iv)
         if p.tx_id not in self._settled_ids:
@@ -249,6 +259,17 @@ class PodView:
         cert = self.certificate(p)
         return SettleStatus.SETTLED, cert
 
+    def _lock_open(self, y: str, rperf: float, strict: bool = True) -> bool:
+        """Conditional-payment conjunct (Sec. 10(1)): a preimage x with
+        H(x) = y is itself written and past-perfect in this view."""
+        x = self.preimages.get(y)
+        if x is None:
+            return False
+        trace = self.traces.get(preimage_tx_id(x))
+        if trace is None:
+            return False
+        return (trace.rconf < rperf) if strict else (trace.rconf <= rperf)
+
     def certificate(self, p: Payment) -> dict:
         """Portable settlement certificate SC_p = (C_p, C_pp): the
         alpha-quorum confirmation votes plus the past-perfection votes
@@ -256,7 +277,7 @@ class PodView:
         trace = self.traces[p.tx_id]
         c_p = [v.to_dict() for v in trace.votes.values()]
         c_pp = [v.to_dict() for v in self.mrt_vote.values()]
-        return {
+        cert = {
             "payment": p.to_dict(),
             "C_p": c_p,
             "C_pp": c_pp,
@@ -265,6 +286,12 @@ class PodView:
             # full portable settlement certificate SC_p = (C_p, C_pp)
             "sc_size_bytes": 32 + (len(c_p) + len(c_pp)) * Vote.WIRE_BYTES,
         }
+        if p.y:
+            x = self.preimages[p.y]
+            pre_trace = self.traces[preimage_tx_id(x)]
+            cert["x"] = x
+            cert["C_pre"] = [v.to_dict() for v in pre_trace.votes.values()]
+        return cert
 
 
 def verify_certificate(cert: dict, n: int, beta: int, gamma: int) -> bool:
@@ -276,7 +303,8 @@ def verify_certificate(cert: dict, n: int, beta: int, gamma: int) -> bool:
         return False
     c_p = [Vote.from_dict(d) for d in cert["C_p"]]
     c_pp = [Vote.from_dict(d) for d in cert["C_pp"]]
-    if any(not v.verify() for v in c_p + c_pp):
+    c_pre = [Vote.from_dict(d) for d in cert.get("C_pre", [])]
+    if any(not v.verify() for v in c_p + c_pp + c_pre):
         return False
     if len({v.rp for v in c_p if v.tx_id == p.tx_id}) < alpha:
         return False
@@ -287,4 +315,15 @@ def verify_certificate(cert: dict, n: int, beta: int, gamma: int) -> bool:
     if beta + len(mrt) < alpha:
         return False
     rperf = _padded_median(list(mrt.values()), alpha, beta, NEG_INF)
-    return rconf < rperf
+    if rconf >= rperf:
+        return False
+    if p.y:  # hash lock: preimage must be certified confirmed and past-perfect
+        x = cert.get("x")
+        if x is None or hash_lock(x) != p.y:
+            return False
+        pre_id = preimage_tx_id(x)
+        if len({v.rp for v in c_pre if v.tx_id == pre_id}) < alpha:
+            return False
+        if _median_low([v.ts for v in c_pre]) >= rperf:
+            return False
+    return True

@@ -5,6 +5,11 @@ A payment is p = (S, k, P, v, m, sigma_S): sender verification key S,
 per-sender sequence number k, payee P, amount v > 0, auxiliary data m
 (e.g. an x402 quote hash), and S's signature over (S, k, P, v, m).
 Replicas treat the serialized payment as an opaque string.
+
+Conditional payments (Sec. 10(1)) extend the object with a hash lock y:
+the payment settles only when a preimage x with H(x) = y is itself
+written to pod and past-perfect. Two counterparties atomically exchange
+payments (PvP) by conditioning both on the same y.
 """
 
 from __future__ import annotations
@@ -16,29 +21,41 @@ from nacl.exceptions import BadSignatureError
 from nacl.signing import SigningKey, VerifyKey
 
 
-def _payload(S: str, k: int, P: str, v: int, m: str) -> bytes:
-    return f"pay|{S}|{k}|{P}|{v}|{m}".encode()
+def _payload(S: str, k: int, P: str, v: int, m: str, y: str) -> bytes:
+    return f"pay|{S}|{k}|{P}|{v}|{m}|{y}".encode()
+
+
+def hash_lock(x_hex: str) -> str:
+    """y = H(x) for the conditional-payment lock (Sec. 10(1))."""
+    return hashlib.sha256(bytes.fromhex(x_hex)).hexdigest()
+
+
+def preimage_tx_id(x_hex: str) -> str:
+    """Transaction id of a revealed preimage written to pod."""
+    return hashlib.sha256(b"preimage|" + bytes.fromhex(x_hex)).hexdigest()
 
 
 @dataclass(frozen=True)
 class Payment:
-    S: str      # sender verification key, hex
-    k: int      # per-sender sequence number
-    P: str      # payee verification key, hex
-    v: int      # amount, micro-USDC
-    m: str      # auxiliary data (quote hash / AP2 mandate)
-    sig: str    # Ed25519 signature by S over (S, k, P, v, m), hex
+    S: str       # sender verification key, hex
+    k: int       # per-sender sequence number
+    P: str       # payee verification key, hex
+    v: int       # amount, micro-USDC
+    m: str       # auxiliary data (quote hash / AP2 mandate)
+    sig: str     # Ed25519 signature by S over (S, k, P, v, m, y), hex
+    y: str = ""  # optional hash lock; "" = unconditional
 
     @staticmethod
-    def sign(sk: SigningKey, k: int, P: str, v: int, m: str = "") -> "Payment":
+    def sign(sk: SigningKey, k: int, P: str, v: int, m: str = "",
+             y: str = "") -> "Payment":
         S = sk.verify_key.encode().hex()
-        sig = sk.sign(_payload(S, k, P, v, m)).signature.hex()
-        return Payment(S, k, P, v, m, sig)
+        sig = sk.sign(_payload(S, k, P, v, m, y)).signature.hex()
+        return Payment(S, k, P, v, m, sig, y)
 
     def verify(self) -> bool:
         try:
             VerifyKey(bytes.fromhex(self.S)).verify(
-                _payload(self.S, self.k, self.P, self.v, self.m),
+                _payload(self.S, self.k, self.P, self.v, self.m, self.y),
                 bytes.fromhex(self.sig))
             return self.v > 0
         except (BadSignatureError, ValueError):
@@ -47,16 +64,18 @@ class Payment:
     @property
     def tx_id(self) -> str:
         return hashlib.sha256(
-            _payload(self.S, self.k, self.P, self.v, self.m) + bytes.fromhex(self.sig)
+            _payload(self.S, self.k, self.P, self.v, self.m, self.y)
+            + bytes.fromhex(self.sig)
         ).hexdigest()
 
     def to_dict(self) -> dict:
         return {"S": self.S, "k": self.k, "P": self.P, "v": self.v,
-                "m": self.m, "sig": self.sig}
+                "m": self.m, "sig": self.sig, "y": self.y}
 
     @staticmethod
     def from_dict(d: dict) -> "Payment":
-        return Payment(d["S"], int(d["k"]), d["P"], int(d["v"]), d["m"], d["sig"])
+        return Payment(d["S"], int(d["k"]), d["P"], int(d["v"]), d["m"],
+                       d["sig"], d.get("y", ""))
 
 
 def conflicting(p: Payment, q: Payment) -> bool:

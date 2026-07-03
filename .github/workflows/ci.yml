@@ -1,0 +1,24 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install -r requirements.txt
+      - name: Unit and end-to-end tests
+        run: python -m pytest tests/ -q
+      - name: Mechanized check of Theorem 1 at (6,1,0)
+        run: python -m turnstile.checker
+      - name: Benchmark harness (quick pass)
+        run: python bench.py --quick
