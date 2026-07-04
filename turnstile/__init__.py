@@ -11,9 +11,16 @@ from .view import PodView, Vote, SettleStatus
 from .replica import Replica
 from .client import Client
 from .facilitator import Facilitator, ResourceServer
+from .checkpoint import (Checkpoint, CheckpointChain, Validator,
+                         assemble_checkpoint, balance_map,
+                         challenge_type_a, challenge_type_b,
+                         checkpoint_equivocation)
 
 __all__ = [
     "Payment", "conflicting", "hash_lock", "preimage_tx_id",
     "verify_conflict_proof", "PodView", "Vote", "SettleStatus",
     "Replica", "Client", "Facilitator", "ResourceServer",
+    "Checkpoint", "CheckpointChain", "Validator", "assemble_checkpoint",
+    "balance_map", "challenge_type_a", "challenge_type_b",
+    "checkpoint_equivocation",
 ]

@@ -25,6 +25,7 @@ opaque strings; all payment semantics live in clients and verifiers.
 | Stateless replica: votes, per-replica sequence numbers, heartbeats, Byzantine equivocation mode (Alg. 1 write path) | `turnstile/replica.py` |
 | Streaming client: write, reveal preimages, poll `Settled(p, D)` | `turnstile/client.py` |
 | x402 facilitator mapping (§7): `/verify`, `/settle`, demo 402 seller | `turnstile/facilitator.py` |
+| Checkpoints and the challenge predicate (§6, Alg. 3): epoch balance maps, α-signed roots, equivocation evidence, rollback | `turnstile/checkpoint.py` |
 | Exhaustive model checker at `(n, β, γ) = (6, 1, 0)` (§9(4), Remark 1) | `turnstile/checker.py` |
 | Benchmark harness (Table 1 + fault/equivocation injections) | `bench.py` |
 
@@ -42,6 +43,18 @@ writes to all replicas → verify = Alg. 2 → settle: serve the resource and
 embed `H(C_p)` in `X-PAYMENT-RESPONSE`. The pod settlement certificate is
 the payment-proof object x402/AP2 leave abstract; a conflicting spend of
 the same `(S, k)` is answered with `409` and the two-signature proof.
+
+**Checkpoints (§6).** Each epoch, every validator evaluates Def. 3 over its
+log prefix at the cut, obtaining a balance map `B_e`, and signs
+`(e, root(B_e), h_e)` with `h_e` hash-chaining the epoch's certificates; α
+matching signatures post as the checkpoint, and a divergent signature is
+extractable equivocation evidence. The committed leaf is
+`(account, balance, max_k)`, which makes Alg. 3's type-(a) challenge
+objective: a valid `SC_p` for payment `(S, k)` plus a Merkle proof that
+`S`'s committed `max_k < k` proves the payment's effect absent and rolls
+the chain back to `e−1`; a type-(b) conflict-pair challenge additionally
+implicates `Σ_e`'s signers. The verifier checks signatures, medians, and
+Merkle paths only — it never re-executes payments.
 
 ## Quickstart
 
